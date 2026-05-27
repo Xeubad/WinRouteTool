@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['routekeeper\\__main__.py'],
+    ['D:\\Desktop\\ProJect\\Personal Development\\MyDev\\WinRouteTool\\routekeeper\\__main__.py'],
     pathex=[],
     binaries=[],
     datas=[],

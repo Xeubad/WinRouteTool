@@ -92,7 +92,7 @@ def list(output_json: bool) -> None:
 @cli.command()
 @click.argument("cidr")
 @click.argument("gateway")
-@click.option("--metric", "-m", default=1, help="路由跃点数")
+@click.option("--metric", "-m", default=0, help="路由跃点数 (0=Windows 自动分配，以太网通常 25~55)")
 @click.option("--persistent", "-p", is_flag=True, help="持久化保存")
 def add(cidr: str, gateway: str, metric: int, persistent: bool) -> None:
     """添加静态路由

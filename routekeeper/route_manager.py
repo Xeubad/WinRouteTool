@@ -83,10 +83,14 @@ def list_routes() -> list[Route]:
 def add_route(
     cidr: str,
     gateway: str,
-    metric: int = 1,
+    metric: int = 0,
     persistent: bool = False,
 ) -> Route:
-    """添加路由"""
+    """添加路由
+
+    Args:
+        metric: 路由跃点数。0 表示由 Windows 自动分配（默认行为）。
+    """
     destination, mask = parse_cidr(cidr)
 
     # 验证网关地址格式

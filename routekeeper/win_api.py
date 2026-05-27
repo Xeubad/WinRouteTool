@@ -1,6 +1,7 @@
 """Windows API 调用模块，用于管理路由表"""
 
 import ctypes
+import subprocess
 from ctypes import wintypes
 from dataclasses import dataclass
 from enum import IntEnum
@@ -93,16 +94,6 @@ GetIpForwardTable.argtypes = [
 ]
 GetIpForwardTable.restype = wintypes.DWORD
 
-# CreateIpForwardEntry
-CreateIpForwardEntry = iphlpapi.CreateIpForwardEntry
-CreateIpForwardEntry.argtypes = [ctypes.POINTER(MIB_IPFORWARDROW)]
-CreateIpForwardEntry.restype = wintypes.DWORD
-
-# DeleteIpForwardEntry
-DeleteIpForwardEntry = iphlpapi.DeleteIpForwardEntry
-DeleteIpForwardEntry.argtypes = [ctypes.POINTER(MIB_IPFORWARDROW)]
-DeleteIpForwardEntry.restype = wintypes.DWORD
-
 
 import socket
 import struct
@@ -123,16 +114,18 @@ def cidr_to_mask(cidr: int) -> str:
     if cidr < 0 or cidr > 32:
         raise ValueError(f"无效的 CIDR 前缀长度: {cidr}")
     mask = (0xFFFFFFFF << (32 - cidr)) & 0xFFFFFFFF
-    return dword_to_ip(mask)
+    return socket.inet_ntoa(struct.pack(">I", mask))
 
 
 def mask_to_cidr(mask: str) -> int:
     """将子网掩码转换为 CIDR 前缀长度"""
     dword = ip_to_dword(mask)
+    # ip_to_dword 返回小端序，需转回大端序再数前导 1
+    big = struct.unpack(">I", struct.pack("<I", dword))[0]
     cidr = 0
-    while dword & 0x80000000:
+    while big & 0x80000000:
         cidr += 1
-        dword <<= 1
+        big <<= 1
     return cidr
 
 
@@ -183,28 +176,60 @@ def get_routes() -> list[RouteEntry]:
     return routes
 
 
+def _find_interface_for_gateway(gateway: str) -> int:
+    """根据网关 IP 自动查找合适的接口索引"""
+    gateway_dword = ip_to_dword(gateway)
+
+    routes = get_routes()
+    # 1. 精确匹配：已存在到该网关的路由，复用其接口
+    for r in routes:
+        if ip_to_dword(r.gateway) == gateway_dword and r.interface_index != 0:
+            return r.interface_index
+
+    # 2. 子网匹配：网关落在某接口直连子网内
+    for r in routes:
+        if r.route_type == ForwardType.DIRECT and r.interface_index != 0:
+            net = ip_to_dword(r.destination)
+            msk = ip_to_dword(r.mask)
+            if (gateway_dword & msk) == (net & msk):
+                return r.interface_index
+
+    return 0
+
+
+CREATE_NO_WINDOW = 0x08000000
+
+
+def _run_route(cmd: list[str]) -> subprocess.CompletedProcess:
+    """执行 route 命令，兼容无控制台的 GUI 环境"""
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        creationflags=CREATE_NO_WINDOW,
+    )
+
+
 def add_route(
     destination: str,
     mask: str,
     gateway: str,
     interface_index: int = 0,
-    metric: int = 1,
+    metric: int = 0,
 ) -> None:
-    """添加静态路由"""
-    row = MIB_IPFORWARDROW()
-    ctypes.memset(ctypes.byref(row), 0, ctypes.sizeof(row))
+    """添加静态路由（通过 route 命令）
 
-    row.dwForwardDest = ip_to_dword(destination)
-    row.dwForwardMask = ip_to_dword(mask)
-    row.dwForwardNextHop = ip_to_dword(gateway)
-    row.dwForwardIfIndex = interface_index
-    row.dwForwardType = ForwardType.DIRECT
-    row.dwForwardProto = ForwardProto.NETMGMT
-    row.dwForwardMetric1 = metric
+    Args:
+        metric: 路由跃点数。0 表示由 Windows 自动分配。
+    """
+    cmd = ["route", "add", destination, "mask", mask, gateway]
+    if metric > 0:
+        cmd.extend(["metric", str(metric)])
 
-    result = CreateIpForwardEntry(ctypes.byref(row))
-    if result != ERROR_SUCCESS:
-        raise ctypes.WinError(result)
+    result = _run_route(cmd)
+    if result.returncode != 0:
+        err = result.stderr.strip() or result.stdout.strip()
+        raise OSError(f"添加路由失败: {err}")
 
 
 def delete_route(
@@ -213,18 +238,13 @@ def delete_route(
     gateway: str,
     interface_index: int = 0,
 ) -> None:
-    """删除静态路由"""
-    row = MIB_IPFORWARDROW()
-    ctypes.memset(ctypes.byref(row), 0, ctypes.sizeof(row))
+    """删除静态路由（通过 route 命令）"""
+    cmd = ["route", "delete", destination, "mask", mask, gateway]
 
-    row.dwForwardDest = ip_to_dword(destination)
-    row.dwForwardMask = ip_to_dword(mask)
-    row.dwForwardNextHop = ip_to_dword(gateway)
-    row.dwForwardIfIndex = interface_index
-
-    result = DeleteIpForwardEntry(ctypes.byref(row))
-    if result != ERROR_SUCCESS:
-        raise ctypes.WinError(result)
+    result = _run_route(cmd)
+    if result.returncode != 0:
+        err = result.stderr.strip() or result.stdout.strip()
+        raise OSError(f"删除路由失败: {err}")
 
 
 def find_route(destination: str, mask: str) -> Optional[MIB_IPFORWARDROW]:

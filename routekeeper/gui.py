@@ -161,10 +161,9 @@ class RouteKeeperGUI:
         gateway_entry.insert(0, "192.168.1.1")
 
         # 跃点数
-        ttk.Label(form_frame, text="跃点数:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        ttk.Label(form_frame, text="跃点数 (留空=自动):").grid(row=2, column=0, sticky=tk.W, pady=5)
         metric_entry = ttk.Entry(form_frame, width=30)
         metric_entry.grid(row=2, column=1, pady=5)
-        metric_entry.insert(0, "1")
 
         # 持久化
         persistent_var = tk.BooleanVar()
@@ -189,11 +188,14 @@ class RouteKeeperGUI:
                 return
 
             try:
-                metric = int(metric_str)
-                if metric < 1:
-                    raise ValueError
+                if metric_str:
+                    metric = int(metric_str)
+                    if metric < 0:
+                        raise ValueError
+                else:
+                    metric = 0  # 留空表示由 Windows 自动分配
             except ValueError:
-                messagebox.showwarning("警告", "跃点数必须是正整数")
+                messagebox.showwarning("警告", "跃点数必须是非负整数（或留空自动分配）")
                 return
 
             # 添加路由
